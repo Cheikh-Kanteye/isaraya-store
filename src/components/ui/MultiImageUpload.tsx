@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useDropzone } from "react-dropzone";
-import { UploadCloud, X } from "lucide-react";
+import { CloudUpload as UploadCloud, X } from "lucide-react";
 import { Button } from "./button";
 import FallbackImage from "@/components/shared/FallbackImage";
 

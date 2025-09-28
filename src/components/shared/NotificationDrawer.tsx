@@ -12,19 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { 
-  Bell, 
-  Check, 
-  Trash2, 
-  CheckCircle, 
-  Package, 
-  CreditCard, 
-  Star,
-  AlertTriangle,
-  Gift,
-  Settings,
-  MarkAsUnread
-} from "lucide-react";
+import { Bell, Check, Trash2, CircleCheck as CheckCircle, Package, CreditCard, Star, TriangleAlert as AlertTriangle, Gift, Settings, AreaChart as MarkAsUnread } from "lucide-react";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { fr } from "date-fns/locale";

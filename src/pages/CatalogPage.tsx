@@ -6,7 +6,7 @@ import { ProductCatalog } from "@/components/catalog/ProductCatalog";
 import { CatalogStats } from "@/components/catalog/CatalogStats";
 import { Breadcrumbs } from "@/components/shared/Breadcrumbs";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, RefreshCw, Filter, X } from "lucide-react";
+import { CircleAlert as AlertCircle, RefreshCw, Filter, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Category } from "@/types";
 
