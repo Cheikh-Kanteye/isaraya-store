@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMeilisearchStore } from "@/stores/meilisearchStore";
 import { Button } from "@/components/ui/button";
+import { AutocompleteSearch } from "./AutocompleteSearch";
 import {
   InstantSearch,
   Hits,
@@ -40,7 +41,6 @@ import {
 import type { RefinementListItem } from "instantsearch.js/es/connectors/refinement-list/connectRefinementList";
 
 const Hit = ({ hit }: { hit: Product }) => {
-  console.log("Rendering hit:", hit);
   return <ProductCard key={hit.id} product={hit} />;
 };
 
@@ -53,14 +53,43 @@ export function SearchInterface() {
     }
   }, [initialize, isIndexReady, error]);
 
+  // Utiliser Meilisearch pour les catégories et marques aussi
   const { data: categories = [] } = useQuery<Category[]>({
-    queryKey: ["categories"],
-    queryFn: () => apiService.categories.getAll(),
+    queryKey: ["meilisearch-categories"],
+    queryFn: async () => {
+      try {
+        const result = await fetch(`${config.meilisearch.host}/indexes/categories/documents?limit=1000`, {
+          headers: { Authorization: `Bearer ${config.meilisearch.apiKey}` },
+        });
+        if (result.ok) {
+          const data = await result.json();
+          return Array.isArray(data) ? data : data.results || [];
+        }
+      } catch (error) {
+        console.warn("Fallback to API for categories");
+      }
+      return apiService.categories.getAll();
+    },
+    enabled: isIndexReady,
   });
 
   const { data: brands = [] } = useQuery<Brand[]>({
-    queryKey: ["brands"],
-    queryFn: () => apiService.brands.getAll(),
+    queryKey: ["meilisearch-brands"],
+    queryFn: async () => {
+      try {
+        const result = await fetch(`${config.meilisearch.host}/indexes/brands/documents?limit=1000`, {
+          headers: { Authorization: `Bearer ${config.meilisearch.apiKey}` },
+        });
+        if (result.ok) {
+          const data = await result.json();
+          return Array.isArray(data) ? data : data.results || [];
+        }
+      } catch (error) {
+        console.warn("Fallback to API for brands");
+      }
+      return apiService.brands.getAll();
+    },
+    enabled: isIndexReady,
   });
 
   const transformCategoryItems = (items: RefinementListItem[]) => {
@@ -145,16 +174,9 @@ export function SearchInterface() {
               <div className="relative group max-w-2xl mx-auto">
                 <div className="absolute -inset-1 bg-gradient-to-r from-yellow-300 to-orange-300 rounded-2xl blur opacity-75 group-hover:opacity-100 transition duration-300"></div>
                 <div className="relative rounded-2xl">
-                  <SearchBox
+                  <AutocompleteSearch
                     placeholder="Recherchez parmi des milliers de produits..."
-                    classNames={{
-                      root: "relative",
-                      input:
-                        "relative w-full h-16 pl-16 pr-6 text-lg font-medium rounded-2xl bg-white border-0 focus:ring-4 focus:ring-white/50 focus:outline-none transition-all shadow-2xl placeholder:text-gray-500 text-gray-900",
-                      submitIcon:
-                        "absolute left-6 top-1/2 -translate-y-1/2 w-6 h-6 text-primary",
-                      resetIcon: "hidden",
-                    }}
+                    className="w-full"
                   />
                   <kbd className="px-3 h-full absolute top-1/3 right-2 text-xs font-semibold text-white bg-primary border border-gray-200 rounded-lg grid place-items-center">
                     Enter

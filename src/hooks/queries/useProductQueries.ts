@@ -56,90 +56,53 @@ export function useCreateProduct() {
   return useMutation({
     mutationFn: (product: Omit<Product, "id" | "createdAt" | "updatedAt">) =>
       apiService.products.createProduct(product),
-    // Mise à jour optimiste - ajoute le produit immédiatement
     onMutate: async (newProduct) => {
-      // Annuler toutes les requêtes de produits
-      await queryClient.cancelQueries({ queryKey: queryKeys.products.all });
-
-      // Sauvegarder l'état précédent
-      const previousData = queryClient.getQueriesData({
-        queryKey: queryKeys.products.all,
-      });
-
-      // Créer un produit temporaire avec un ID unique
-      const tempProduct: Product = {
+      // Créer un produit temporaire avec statut "creating"
+      const tempProduct: Product & { isCreating?: boolean } = {
         ...newProduct,
         id: `temp-${Date.now()}`,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        isCreating: true,
       };
 
-      // Ajouter le produit temporaire à TOUTES les requêtes de produits
+      // Ajouter immédiatement à l'interface
       queryClient.setQueriesData(
         { queryKey: queryKeys.products.all },
-        (oldData: Product[] | { data: Product[] } | undefined) => {
+        (oldData: Product[] | undefined) => {
           if (!oldData) return [tempProduct];
-
-          if (Array.isArray(oldData)) {
-            return [tempProduct, ...oldData];
-          }
-
-          if (oldData.data && Array.isArray(oldData.data)) {
-            return { ...oldData, data: [tempProduct, ...oldData.data] };
-          }
-
-          return oldData;
+          return [tempProduct, ...oldData];
         }
       );
 
-      return { previousData, tempProduct };
+      return { tempProduct };
     },
-    // En cas d'erreur, restaurer les données précédentes
-    onError: (err, newProduct, context) => {
-      if (context?.previousData) {
-        context.previousData.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data);
-        });
-      }
-    },
-    // Remplacer le produit temporaire par le vrai produit du serveur
-    onSuccess: (realProduct, variables, context) => {
-      if (context?.tempProduct) {
-        // Remplacer le produit temporaire par le vrai produit
-        queryClient.setQueriesData(
-          { queryKey: queryKeys.products.all },
-          (oldData: Product[] | { data: Product[] } | undefined) => {
-            if (!oldData) return oldData;
-
-            if (Array.isArray(oldData)) {
-              return oldData.map((product: Product) =>
-                product.id === context.tempProduct.id ? realProduct : product
-              );
-            }
-
-            if (oldData.data && Array.isArray(oldData.data)) {
-              return {
-                ...oldData,
-                data: oldData.data.map((product: Product) =>
-                  product.id === context.tempProduct.id ? realProduct : product
-                ),
-              };
-            }
-
-            return oldData;
-          }
-        );
-      }
-
-      // Ajouter le produit réel au cache de détail
+    onSuccess: (realProduct, _, context) => {
+      // Remplacer le produit temporaire par le vrai
+      queryClient.setQueriesData(
+        { queryKey: queryKeys.products.all },
+        (oldData: Product[] | undefined) => {
+          if (!oldData) return [realProduct];
+          return oldData.map((p) =>
+            p.id === context?.tempProduct.id ? realProduct : p
+          );
+        }
+      );
+      
       queryClient.setQueryData(
         queryKeys.products.detail(realProduct.id),
         realProduct
       );
     },
-    // Synchroniser avec le serveur
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
+    onError: (_, __, context) => {
+      // Supprimer le produit temporaire en cas d'erreur
+      queryClient.setQueriesData(
+        { queryKey: queryKeys.products.all },
+        (oldData: Product[] | undefined) => {
+          if (!oldData) return [];
+          return oldData.filter((p) => p.id !== context?.tempProduct.id);
+        }
+      );
     },
   });
 }

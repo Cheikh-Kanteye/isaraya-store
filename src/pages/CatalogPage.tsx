@@ -1,21 +1,28 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
-import { categoryService } from "@/services/categoryService";
+import { meilisearchService } from "@/services/meilisearchService";
 import { ProductFilters } from "@/components/catalog/ProductFilters";
 import { ProductCatalog } from "@/components/catalog/ProductCatalog";
 import { CatalogStats } from "@/components/catalog/CatalogStats";
 import { Breadcrumbs } from "@/components/shared/Breadcrumbs";
-import { useCatalogFilters } from "@/hooks/useCatalogFilters";
-import { useProductSearch } from "@/hooks/useProductSearch";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, RefreshCw, Filter, X } from "lucide-react";
-import { useProductStore } from "@/stores";
+import { useQuery } from "@tanstack/react-query";
+import type { Category } from "@/types";
 
 interface BreadcrumbItem {
   label: string;
   path: string;
 }
 
+interface FilterState {
+  search?: string;
+  categories?: string[];
+  brands?: string[];
+  priceRange?: [number, number];
+  rating?: number;
+  sortBy?: string;
+}
 export default function CatalogPage() {
   const { category: categoryId, subcategory: subcategoryId } = useParams<{
     category?: string;
@@ -26,33 +33,70 @@ export default function CatalogPage() {
     BreadcrumbItem[]
   >([]);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-
-  const {
-    context,
-    filters,
-    filteredAvailableCategories,
-    availableBrands,
-    handleFiltersChange,
-    handleClearFilters,
-    isLoading,
-    error,
-    pageTitle,
-    pageDescription,
-  } = useCatalogFilters();
-  const { products } = useProductStore();
-
-  const {
-    searchQuery,
-    sortBy,
-    filteredProducts,
-    totalProducts,
-    clearSearch,
-    resetAll,
-  } = useProductSearch({
-    products: products,
-    defaultSortBy: "name-asc",
-    defaultViewMode: "grid",
+  const [filters, setFilters] = useState<FilterState>({
+    categories: categoryId ? [categoryId] : [],
+    search: "",
+    brands: [],
+    priceRange: [0, 1000000],
+    rating: 0,
+    sortBy: "newest",
   });
+
+  // Charger la catégorie actuelle via Meilisearch
+  const { data: currentCategory } = useQuery({
+    queryKey: ["category", categoryId],
+    queryFn: async () => {
+      if (!categoryId) return null;
+      const result = await meilisearchService.searchCategories("", 0, 1000);
+      return result.hits.find((cat: Category) => cat.id === categoryId) || null;
+    },
+    enabled: !!categoryId,
+  });
+
+  // Charger les catégories et marques disponibles
+  const { data: availableCategories = [] } = useQuery({
+    queryKey: ["available-categories"],
+    queryFn: async () => {
+      const result = await meilisearchService.searchCategories("", 0, 1000);
+      return result.hits;
+    },
+  });
+
+  const { data: availableBrands = [] } = useQuery({
+    queryKey: ["available-brands"],
+    queryFn: async () => {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_MEILISEARCH_HOST || "http://localhost:7700"}/indexes/brands/documents?limit=1000`, {
+          headers: { Authorization: `Bearer ${import.meta.env.VITE_MEILISEARCH_API_KEY || "masterkey"}` },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          return Array.isArray(data) ? data : data.results || [];
+        }
+      } catch (error) {
+        console.warn("Fallback to API for brands");
+      }
+      return [];
+    },
+  });
+
+  const handleFiltersChange = (newFilters: Partial<FilterState>) => {
+    setFilters(prev => ({ ...prev, ...newFilters }));
+  };
+
+  const handleClearFilters = () => {
+    setFilters({
+      categories: categoryId ? [categoryId] : [],
+      search: "",
+      brands: [],
+      priceRange: [0, 1000000],
+      rating: 0,
+      sortBy: "newest",
+    });
+  };
+
+  const pageTitle = currentCategory?.name || "Tous les produits";
+  const pageDescription = currentCategory?.description || "Découvrez notre sélection de produits de qualité.";
 
   useEffect(() => {
     const fetchBreadcrumbs = async () => {
@@ -62,40 +106,19 @@ export default function CatalogPage() {
       ];
 
       if (categoryId) {
-        try {
-          const categoryPath = await categoryService.getCategoryPath(
-            categoryId
-          );
-          const categoryBreadcrumbs = categoryPath.map((cat) => ({
-            label: cat.name,
-            path: `/catalog/${cat.id}`,
-          }));
-
-          if (subcategoryId && subcategoryId !== categoryId) {
-            const subcategoryPath = await categoryService.getCategoryPath(
-              subcategoryId
-            );
-            const subcategory = subcategoryPath[subcategoryPath.length - 1];
-            if (subcategory) {
-              categoryBreadcrumbs.push({
-                label: subcategory.name,
-                path: `/catalog/${categoryId}/${subcategoryId}`,
-              });
-            }
-          }
-
-          setDynamicBreadcrumbs([...baseItems, ...categoryBreadcrumbs]);
-        } catch (error) {
-          console.error("Error fetching breadcrumb path:", error);
-          setDynamicBreadcrumbs(baseItems);
+        if (currentCategory) {
+          baseItems.push({
+            label: currentCategory.name,
+            path: `/catalog/${currentCategory.slug}`,
+          });
         }
-      } else {
-        setDynamicBreadcrumbs(baseItems);
       }
+      
+      setDynamicBreadcrumbs(baseItems);
     };
 
     fetchBreadcrumbs();
-  }, [categoryId, subcategoryId]);
+  }, [categoryId, subcategoryId, currentCategory]);
 
   const handleRefresh = async () => {
     try {
@@ -127,39 +150,6 @@ export default function CatalogPage() {
 
   return (
     <div className="container mx-auto px-4 py-8 bg-white">
-      {/* Loading State */}
-      {isLoading && (
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2"></div>
-            <p className="text-gray-600">Chargement du catalogue...</p>
-          </div>
-        </div>
-      )}
-
-      {/* Error State */}
-      {error && (
-        <div className="bg-red-100 border border-red-300 rounded-lg p-6 mb-6">
-          <div className="flex items-start">
-            <AlertCircle className="h-5 w-5 text-red-600 mr-3 mt-0.5" />
-            <div className="flex-1">
-              <h3 className="text-red-900 font-medium mb-2">
-                Erreur de chargement
-              </h3>
-              <p className="text-red-800 text-sm mb-4">{error}</p>
-              <Button
-                onClick={handleRefresh}
-                size="sm"
-                variant="outline"
-                className="border-red-400 text-red-800 hover:bg-red-200"
-              >
-                <RefreshCw className="h-4 w-4 mr-2" />
-                Réessayer
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Breadcrumbs */}
       <Breadcrumbs items={dynamicBreadcrumbs} />
@@ -172,21 +162,21 @@ export default function CatalogPage() {
         <p className="text-lg text-gray-600 mb-4">{pageDescription}</p>
 
         <div className="flex justify-center space-x-2">
-          {context.isSubcategory && (
+          {subcategoryId && (
             <div className="inline-flex items-center px-3 py-1 rounded-full bg-green-50 text-green-900 text-sm">
               <span className="w-2 h-2 bg-green-600 rounded-full mr-2"></span>
               Sous-catégorie spécialisée
             </div>
           )}
 
-          {context.id && !context.isSubcategory && (
+          {categoryId && !subcategoryId && (
             <div className="inline-flex items-center px-3 py-1 rounded-full bg-primary/5 text-primary text-sm">
               <span className="w-2 h-2 bg-primary rounded-full mr-2"></span>
               Catégorie sélectionnée
             </div>
           )}
 
-          {!context.id && (
+          {!categoryId && (
             <div className="inline-flex items-center px-3 py-1 rounded-full bg-gray-50 text-gray-900 text-sm">
               <span className="w-2 h-2 bg-gray-600 rounded-full mr-2"></span>
               Catalogue complet
@@ -195,15 +185,6 @@ export default function CatalogPage() {
         </div>
       </header>
 
-      {/* Catalog Stats */}
-      <CatalogStats
-        totalProducts={totalProducts}
-        filteredProducts={filteredProducts.length}
-        filters={filters}
-        loading={isLoading}
-        categoryName={context.name}
-        isSubcategory={context.isSubcategory}
-      />
 
       {/* Filter Button for MD screens */}
       <div className="md:block lg:hidden mb-6">
@@ -249,9 +230,9 @@ export default function CatalogPage() {
             filters={filters}
             onFiltersChange={handleFiltersChange}
             onClearFilters={handleClearFilters}
-            availableCategories={filteredAvailableCategories}
+            availableCategories={availableCategories}
             availableBrands={availableBrands}
-            currentCategoryId={context.id}
+            currentCategoryId={categoryId}
           />
         </div>
       </div>
@@ -265,58 +246,19 @@ export default function CatalogPage() {
               filters={filters}
               onFiltersChange={handleFiltersChange}
               onClearFilters={handleClearFilters}
-              availableCategories={filteredAvailableCategories}
+              availableCategories={availableCategories}
               availableBrands={availableBrands}
-              currentCategoryId={context.id}
+              currentCategoryId={categoryId}
             />
           </div>
         </aside>
 
         {/* Product Catalog */}
         <main className="col-span-1 lg:col-span-3">
-          {/* Empty State */}
-          {!isLoading && filteredProducts.length === 0 && (
-            <div className="text-center py-16">
-              <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
-                <AlertCircle className="h-8 w-8 text-gray-500" />
-              </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                Aucun produit trouvé
-              </h3>
-              <p className="text-gray-600 mb-6 max-w-sm mx-auto">
-                {searchQuery
-                  ? `Aucun produit ne correspond à votre recherche "${searchQuery}".`
-                  : "Aucun produit ne correspond à vos critères de filtre actuels."}
-              </p>
-              <div className="flex justify-center space-x-4">
-                {searchQuery && (
-                  <Button
-                    onClick={clearSearch}
-                    variant="outline"
-                    className="border-gray-300 text-gray-800 hover:bg-gray-100"
-                  >
-                    Effacer la recherche
-                  </Button>
-                )}
-                <Button
-                  onClick={handleClearFilters}
-                  variant="outline"
-                  className="border-gray-300 text-gray-800 hover:bg-gray-100"
-                >
-                  Effacer les filtres
-                </Button>
-                <Button
-                  onClick={resetAll}
-                  className="bg-primary/90 text-white hover:bg-primary"
-                >
-                  Tout réinitialiser
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* Product Grid/List */}
-          {!isLoading && filteredProducts.length > 0 && <ProductCatalog />}
+          <ProductCatalog 
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+          />
         </main>
       </div>
     </div>

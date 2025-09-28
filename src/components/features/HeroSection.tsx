@@ -3,6 +3,7 @@ import { Search, TrendingUp, Shield, Truck } from "lucide-react";
 import heroImage from "@/assets/hero-image.jpg";
 import { useNavigate } from "react-router-dom";
 import FallbackImage from "@/components/shared/FallbackImage"; // Importation du composant FallbackImage
+import { AutocompleteSearch } from "@/components/search/AutocompleteSearch";
 
 const HeroSection = () => {
   const navigate = useNavigate();
@@ -31,6 +32,13 @@ const HeroSection = () => {
               </p>
             </div>
 
+            {/* Barre de recherche avec autocomplétion */}
+            <div className="max-w-lg">
+              <AutocompleteSearch
+                placeholder="Que recherchez-vous ?"
+                className="w-full"
+              />
+            </div>
             <div className="flex flex-col sm:flex-row gap-4">
               <Button
                 size="lg"

@@ -168,7 +168,6 @@ const ProductForm: React.FC<ProductFormProps> = ({
     }
 
     setIsSubmitting(true);
-    const uploadedImageData: { publicId: string; url: string } | null = null;
 
     try {
       setLoaderOpen(true);
@@ -179,9 +178,21 @@ const ProductForm: React.FC<ProductFormProps> = ({
       let imageUrls: string[] = [];
       const files = (data.imagesFiles || []) as File[];
       if (files.length > 0) {
-        // Multi-upload via backend endpoint (IA + Cloudinary), limited to 3 max by UI
-        const uploaded = await apiService.images.uploadMultiple(files);
-        imageUrls = uploaded.map((u) => u.url);
+        // Upload optimisé en arrière-plan
+        setSteps((prev) =>
+          prev.map((s, i) => ({ ...s, status: i === 1 ? "active" : i === 0 ? "done" : s.status }))
+        );
+        
+        try {
+          const uploaded = await apiService.images.uploadMultiple(files);
+          imageUrls = uploaded.map((u) => u.url);
+        } catch (uploadError) {
+          console.error("Erreur upload images:", uploadError);
+          // Continuer avec des images par défaut si l'upload échoue
+          imageUrls = ["/placeholder.svg"];
+          toast.warning("Erreur d'upload d'images, produit créé avec image par défaut");
+        }
+        
         setSteps((prev) =>
           prev.map((s, i) => ({ ...s, status: i <= 1 ? "done" : s.status }))
         );
@@ -245,15 +256,8 @@ const ProductForm: React.FC<ProductFormProps> = ({
           onSuccess();
         }, 600);
       } catch (productError) {
-        if (imageUrls && imageUrls.length) {
-          try {
-            await Promise.all(
-              imageUrls.map((u) => apiService.images.delete(u))
-            );
-          } catch (cleanupError) {
-            console.warn("Erreur lors du nettoyage des images:", cleanupError);
-          }
-        }
+        // Ne pas supprimer les images en cas d'erreur produit
+        // L'utilisateur peut réessayer sans re-upload
         throw productError;
       }
     } catch (error) {
@@ -267,7 +271,7 @@ const ProductForm: React.FC<ProductFormProps> = ({
       );
     } finally {
       setIsSubmitting(false);
-      setLoaderOpen(false);
+      // Garder le loader ouvert pour montrer le succès
     }
   };
 

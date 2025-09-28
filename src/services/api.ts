@@ -349,10 +349,10 @@ export const apiService = {
       files: File[]
     ): Promise<{ url: string; altText?: string }[]> {
       const formData = new FormData();
-      files.forEach((f) => formData.append("files", f));
+      files.forEach((f) => formData.append("images", f));
       const response = await apiClient.post<
         { url: string; altText?: string }[]
-      >("/produit/upload-images", formData, {
+      >("/api/produit/upload-images", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       return response.data || [];

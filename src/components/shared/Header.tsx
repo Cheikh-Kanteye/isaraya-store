@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/stores";
 import { useCartStore } from "@/stores";
+import { NotificationDrawer } from "./NotificationDrawer";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,6 +58,18 @@ const Header = () => {
                 <span className="text-sm text-foreground">
                   Bonjour, {user.firstName}
                 </span>
+                
+                {/* Notifications */}
+                <NotificationDrawer>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="relative"
+                  >
+                    <Bell className="h-4 w-4" />
+                  </Button>
+                </NotificationDrawer>
+                
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -153,6 +166,19 @@ const Header = () => {
 
           {/* Mobile Navigation Toggle */}
           <div className="md:hidden flex items-center space-x-2">
+            {/* Notifications mobile */}
+            {user && (
+              <NotificationDrawer>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="relative"
+                >
+                  <Bell className="h-4 w-4" />
+                </Button>
+              </NotificationDrawer>
+            )}
+            
             <Button
               variant="ghost"
               size="sm"

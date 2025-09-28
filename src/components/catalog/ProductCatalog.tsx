@@ -1,7 +1,7 @@
 import React, { useMemo, useCallback } from "react";
 import { Grid, List, Search } from "lucide-react";
-import { useProductStore, useCartStore } from "@/stores";
-import { type FilterState } from "@/stores/productStore";
+import { useCartStore } from "@/stores";
+import { meilisearchService } from "@/services/meilisearchService";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -15,6 +15,7 @@ import { Skeleton } from "../ui/skeleton";
 import { type Product } from "@/types";
 import ProductCard from "../shared/ProductCard";
 import { useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 
 const SORT_OPTIONS = [
   { value: "newest", label: "Plus récents" },
@@ -22,14 +23,25 @@ const SORT_OPTIONS = [
   { value: "price_desc", label: "Prix décroissant" },
   { value: "name_asc", label: "Nom A-Z" },
   { value: "name_desc", label: "Nom Z-A" },
+  { value: "rating_desc", label: "Mieux notés" },
 ] as const;
 
+interface FilterState {
+  search?: string;
+  categories?: string[];
+  brands?: string[];
+  priceRange?: [number, number];
+  rating?: number;
+  sortBy?: string;
+}
 interface ProductCatalogProps {
   showSearch?: boolean;
   showFilters?: boolean;
   showViewToggle?: boolean;
   itemsPerPage?: number;
   className?: string;
+  filters?: FilterState;
+  onFiltersChange?: (filters: Partial<FilterState>) => void;
 }
 
 export function ProductCatalog({
@@ -38,55 +50,64 @@ export function ProductCatalog({
   showViewToggle = true,
   itemsPerPage = 12, // TODO: Implement pagination
   className = "",
+  filters = {},
+  onFiltersChange,
 }: ProductCatalogProps) {
   const {
-    filteredProducts,
-    products,
-    categories,
-    availableBrands,
-    filters,
-    setFilters,
-    isLoading,
-  } = useProductStore();
-
   const { categoryId } = useParams<{ categoryId?: string }>();
   const { addToCart } = useCartStore();
 
   const [viewMode, setViewMode] = React.useState<"grid" | "list">("grid");
+  const [currentPage, setCurrentPage] = React.useState(0);
 
-  // Memoized available subcategories for current category
-  const availableSubcategories = useMemo(() => {
-    if (!categoryId) return [];
-    return categories.filter((cat) => cat.parentId === categoryId);
-  }, [categories, categoryId]);
+  // Utiliser Meilisearch pour la recherche de produits
+  const { data: searchResult, isLoading } = useQuery({
+    queryKey: ["meilisearch-products", filters, currentPage, categoryId],
+    queryFn: async () => {
+      const searchFilters: any = {};
+      
+      if (categoryId) {
+        searchFilters.categoryId = categoryId;
+      }
+      if (filters.categories?.length) {
+        searchFilters.categoryId = filters.categories[0];
+      }
+      if (filters.brands?.length) {
+        searchFilters.brandId = filters.brands[0];
+      }
+      if (filters.priceRange) {
+        searchFilters.priceRange = filters.priceRange;
+      }
+      if (filters.rating) {
+        searchFilters.rating = filters.rating;
+      }
+
+      return meilisearchService.searchProducts(
+        filters.search || "",
+        searchFilters,
+        currentPage,
+        itemsPerPage
+      );
+    },
+    enabled: true,
+  });
+
+  const filteredProducts = searchResult?.hits || [];
+  const totalProducts = searchResult?.nbHits || 0;
 
   // Memoized callbacks to prevent unnecessary re-renders
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      setFilters({ search: e.target.value });
+      onFiltersChange?.({ search: e.target.value });
     },
-    [setFilters]
-  );
-
-  const handleCategoryChange = useCallback(
-    (value: string) => {
-      setFilters({ categories: value === "all" ? [] : [value] });
-    },
-    [setFilters]
-  );
-
-  const handleBrandChange = useCallback(
-    (value: string) => {
-      setFilters({ brands: value === "all" ? [] : [value] });
-    },
-    [setFilters]
+    [onFiltersChange]
   );
 
   const handleSortChange = useCallback(
     (value: string) => {
-      setFilters({ sortBy: value as FilterState["sortBy"] });
+      onFiltersChange?.({ sortBy: value });
     },
-    [setFilters]
+    [onFiltersChange]
   );
 
   const handleViewModeChange = useCallback((mode: "grid" | "list") => {
@@ -96,13 +117,11 @@ export function ProductCatalog({
   const handleAddToCart = useCallback(
     (product: Product) => {
       addToCart(product, 1);
-      // TODO: Add toast notification
     },
     [addToCart]
   );
 
   const handleAddToFavorites = useCallback((product: Product) => {
-    // TODO: Implement favorite logic
     console.log("Ajout aux favoris:", product);
   }, []);
 
@@ -136,66 +155,22 @@ export function ProductCatalog({
         )}
 
         <div className="flex flex-wrap gap-2 items-center">
-          {showFilters && (
-            <>
-              {/* Category Filter - Only show if there are subcategories */}
-              {availableSubcategories.length > 0 && (
-                <Select
-                  value={filters.categories?.[0] || "all"}
-                  onValueChange={handleCategoryChange}
-                >
-                  <SelectTrigger className="w-auto min-w-[180px]">
-                    <SelectValue placeholder="Toutes les catégories" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Toutes les catégories</SelectItem>
-                    {availableSubcategories.map((cat) => (
-                      <SelectItem key={cat.id} value={cat.id}>
-                        {cat.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-
-              {/* Brand Filter - Only show if there are brands available */}
-              {availableBrands.length > 0 && (
-                <Select
-                  value={filters.brands?.[0] || "all"}
-                  onValueChange={handleBrandChange}
-                >
-                  <SelectTrigger className="w-auto min-w-[180px]">
-                    <SelectValue placeholder="Toutes les marques" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Toutes les marques</SelectItem>
-                    {availableBrands.map((brand) => (
-                      <SelectItem key={brand.id} value={brand.id}>
-                        {brand.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-
-              {/* Sort By Filter */}
-              <Select
-                value={filters.sortBy || "newest"}
-                onValueChange={handleSortChange}
-              >
-                <SelectTrigger className="w-auto min-w-[180px]">
-                  <SelectValue placeholder="Trier par" />
-                </SelectTrigger>
-                <SelectContent>
-                  {SORT_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </>
-          )}
+          {/* Sort By Filter */}
+          <Select
+            value={filters.sortBy || "newest"}
+            onValueChange={handleSortChange}
+          >
+            <SelectTrigger className="w-auto min-w-[180px]">
+              <SelectValue placeholder="Trier par" />
+            </SelectTrigger>
+            <SelectContent>
+              {SORT_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
           {showViewToggle && (
             <div className="flex items-center gap-2">
@@ -221,10 +196,11 @@ export function ProductCatalog({
       {/* Results count */}
       {!isLoading && (
         <div className="text-sm text-muted-foreground">
-          {filteredProducts.length} produit
-          {filteredProducts.length > 1 ? "s" : ""} trouvé
-          {filteredProducts.length > 1 ? "s" : ""}
+          {totalProducts} produit{totalProducts > 1 ? "s" : ""} trouvé{totalProducts > 1 ? "s" : ""}
           {categoryId && <span className="ml-2">dans cette catégorie</span>}
+          {searchResult?.processingTimeMS && (
+            <span className="ml-2 text-xs">({searchResult.processingTimeMS}ms)</span>
+          )}
         </div>
       )}
 
@@ -258,6 +234,29 @@ export function ProductCatalog({
           </div>
         )}
       </div>
+
+      {/* Pagination */}
+      {searchResult && searchResult.nbPages > 1 && (
+        <div className="flex justify-center gap-2 mt-8">
+          <Button
+            variant="outline"
+            onClick={() => setCurrentPage(Math.max(0, currentPage - 1))}
+            disabled={currentPage === 0}
+          >
+            Précédent
+          </Button>
+          <span className="flex items-center px-4 text-sm">
+            Page {currentPage + 1} sur {searchResult.nbPages}
+          </span>
+          <Button
+            variant="outline"
+            onClick={() => setCurrentPage(Math.min(searchResult.nbPages - 1, currentPage + 1))}
+            disabled={currentPage >= searchResult.nbPages - 1}
+          >
+            Suivant
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

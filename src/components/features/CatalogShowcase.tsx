@@ -3,14 +3,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { categoryService, FormattedCategory } from "@/services/categoryService";
+import { meilisearchService } from "@/services/meilisearchService";
 import FallbackImage from "@/components/shared/FallbackImage";
 import config from "@/config";
 import {
   ensureCategoriesIndex,
   initializeCategoriesIndex,
 } from "@/lib/meilisearch";
+import type { Category } from "@/types";
 
+interface FormattedCategory {
+  id: string;
+  title: string;
+  slug: string;
+  description?: string;
+  image: string;
+  subcategories: Array<{
+    id: string;
+    name: string;
+    slug: string;
+    image: string;
+  }>;
+}
 const CatalogShowcase = () => {
   const navigate = useNavigate();
   const [categories, setCategories] = useState<FormattedCategory[]>([]);
@@ -22,63 +36,51 @@ const CatalogShowcase = () => {
       try {
         setLoading(true);
         await ensureCategoriesIndex();
-        // Récupération rapide via Meilisearch (documents categories)
-        let docs: any[] = [];
+        
+        // Utiliser le service Meilisearch optimisé
         try {
-          const resp = await fetch(
-            `${config.meilisearch.host}/indexes/categories/documents?limit=1000`,
-            {
-              headers: { Authorization: `Bearer ${config.meilisearch.apiKey}` },
-            }
-          );
-          if (resp.status === 404) {
-            await initializeCategoriesIndex();
-          } else if (resp.ok) {
-            const data = await resp.json();
-            docs = Array.isArray(data)
-              ? data
-              : data?.results || data?.hits || [];
+          const result = await meilisearchService.searchCategories("", 0, 50);
+          const docs = result.hits;
+          
+          if (!docs.length) {
+            throw new Error("Aucune catégorie trouvée");
           }
-        } catch (err) {
-          console.error("Erreur Meilisearch:", err);
-        }
 
-        if (!docs.length) {
-          // Fallback API si Meilisearch indisponible
+          // Regrouper: catégories principales + sous-catégories
+          const mains = docs.filter((c: Category) => !c.parentId);
+          const mapByParent: Record<string, Category[]> = {};
+          docs.forEach((c: Category) => {
+            if (c.parentId) {
+              mapByParent[c.parentId] = mapByParent[c.parentId] || [];
+              mapByParent[c.parentId].push(c);
+            }
+          });
+
+          const formatted: FormattedCategory[] = mains.map((main: Category) => ({
+            id: String(main.id),
+            title: main.name,
+            slug: main.slug,
+            description: main.description,
+            image: main.imageUrl || "/placeholder.svg",
+            subcategories: (mapByParent[main.id] || [])
+              .map((sub: Category) => ({
+                id: String(sub.id),
+                name: sub.name,
+                slug: sub.slug,
+                image: sub.imageUrl || "/placeholder.svg",
+              })),
+          }));
+
+          setCategories(
+            formatted.sort((a, b) => a.title.localeCompare(b.title)).slice(0, 12)
+          );
+        } catch (err) {
+          console.warn("Erreur Meilisearch, fallback vers API:", err);
+          // Fallback vers l'API directe
+          const { categoryService } = await import("@/services/categoryService");
           const formatted = await categoryService.getFormattedCategories();
           setCategories(formatted);
-          return;
         }
-
-        // Regrouper: catégories principales + sous-catégories
-        const mains = docs.filter((c) => !c.parentId);
-        const mapByParent: Record<string, any[]> = {};
-        docs.forEach((c) => {
-          if (c.parentId) {
-            mapByParent[c.parentId] = mapByParent[c.parentId] || [];
-            mapByParent[c.parentId].push(c);
-          }
-        });
-
-        const formatted: FormattedCategory[] = mains.map((main: any) => ({
-          id: String(main.id),
-          title: main.name,
-          slug: main.slug,
-          description: main.description,
-          image: main.imageUrl || "/placeholder.svg",
-          subcategories: (mapByParent[main.id] || [])
-            .sort((a, b) => (a.order || 0) - (b.order || 0))
-            .map((sub) => ({
-              id: String(sub.id),
-              name: sub.name,
-              slug: sub.slug,
-              image: sub.imageUrl || "/placeholder.svg",
-            })),
-        }));
-
-        setCategories(
-          formatted.sort((a, b) => a.title.localeCompare(b.title)).slice(0, 12)
-        );
       } catch (err) {
         setError(
           "Impossible de charger les catégories. Veuillez réessayer plus tard."

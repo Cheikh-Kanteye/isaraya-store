@@ -27,6 +27,13 @@ export default function MultiImageUpload({ value = [], onChange, disabled, max =
       const remaining = Math.max(0, max - current.length);
       const next = [...current, ...acceptedFiles.slice(0, remaining)];
       onChange(next);
+      
+      // Toast de feedback immédiat
+      if (acceptedFiles.length > remaining) {
+        toast.warning(`Seulement ${remaining} image(s) ajoutée(s). Maximum ${max} autorisé.`);
+      } else {
+        toast.success(`${acceptedFiles.length} image(s) ajoutée(s)`);
+      }
     },
     [onChange, value, max]
   );

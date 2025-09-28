@@ -10,8 +10,8 @@ export const { searchClient } = instantMeiliSearch(
 export const initializeMeilisearchIndex = async () => {
   try {
     const productsData = await apiService.products.getAll();
-    const categorieData = await apiService.categories.getAll();
-    const brandData = await apiService.brands.getAll();
+    const categoriesData = await apiService.categories.getAll();
+    const brandsData = await apiService.brands.getAll();
 
     const flattenedProducts = productsData.map((product) => ({
       id: product.id,
@@ -35,9 +35,9 @@ export const initializeMeilisearchIndex = async () => {
       status: product.status,
       specifications: product.specifications,
       imageUrls: product.images.map((img) => img.url),
-      categoryName: categorieData.find((c) => c.id === product.categoryId)
+      categoryName: categoriesData.find((c) => c.id === product.categoryId)
         ?.name,
-      brandName: brandData.find((b) => b.id === product.brandId)?.name,
+      brandName: brandsData.find((b) => b.id === product.brandId)?.name,
     }));
 
     await deleteIndexIfExists("products");
@@ -53,6 +53,16 @@ export const initializeMeilisearchIndex = async () => {
           "tags",
           "categoryName",
           "brandName",
+          "status",
+          "vendorId",
+        ],
+        searchableAttributes: [
+          "name",
+          "title",
+          "description",
+          "categoryName",
+          "brandName",
+          "tags",
         ],
         rankingRules: [
           "words",
@@ -62,7 +72,18 @@ export const initializeMeilisearchIndex = async () => {
           "sort",
           "exactness",
         ],
-        sortableAttributes: ["price", "createdAt"],
+        sortableAttributes: ["price", "createdAt", "rating", "name"],
+      })
+    );
+
+    // Initialiser l'index des marques aussi
+    await deleteIndexIfExists("brands");
+    await createIndex("brands", "id");
+    await addDocuments("brands", brandsData);
+    await waitForTaskCompletion(
+      await setSearchSettings("brands", {
+        searchableAttributes: ["name"],
+        sortableAttributes: ["name"],
       })
     );
   } catch (error) {
