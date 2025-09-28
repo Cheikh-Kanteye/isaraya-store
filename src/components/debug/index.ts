@@ -1,0 +1,1 @@
+export { ProductDiagnostic } from './ProductDiagnostic';

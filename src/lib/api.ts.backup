@@ -1,0 +1,595 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import axios from "axios";
+import { toast } from "sonner";
+import { useAuthStore } from "@/stores/authStore";
+import type {
+  Product,
+  CreateProduitDto,
+  Category,
+  Brand,
+  Order,
+  User,
+  ProductsParams,
+  MerchantProfile,
+  CreateMerchantProfileDto,
+  MerchantOrder,
+  MerchantStats,
+} from "@/types";
+
+import config from "@/config";
+
+const apiClient = axios.create({
+  baseURL: config.api.url,
+});
+
+// Intercepteur pour ajouter le token JWT à chaque requête
+apiClient.interceptors.request.use(
+  (config) => {
+    let token = null;
+
+    // Récupérer le token depuis le store Zustand persisté dans localStorage
+    try {
+      const authStorage = localStorage.getItem("auth-storage");
+      if (authStorage) {
+        const parsedAuth = JSON.parse(authStorage);
+        token = parsedAuth?.state?.accessToken;
+      }
+    } catch (error) {
+      console.warn(
+        "Erreur lors de la récupération du token depuis auth-storage:",
+        error
+      );
+    }
+
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Intercepteur de réponse pour déballer l'enveloppe API Gateway
+apiClient.interceptors.response.use(
+  (response) => {
+    const d = response?.data as unknown;
+    if (d && typeof d === "object") {
+      const obj = d as Record<string, unknown>;
+      if (
+        (obj as { status?: string }).status === "success" &&
+        "payload" in obj
+      ) {
+        return { ...response, data: (obj as { payload: unknown }).payload };
+      }
+      if ("data" in obj) {
+        return { ...response, data: (obj as { data: unknown }).data };
+      }
+      if ("items" in obj) {
+        return { ...response, data: (obj as { items: unknown }).items };
+      }
+      if ("orders" in obj) {
+        return { ...response, data: (obj as { orders: unknown }).orders };
+      }
+    }
+    return response;
+  },
+  (error) => {
+    const res = error?.response;
+    const status = res?.status ?? 0;
+    const d: unknown = res?.data ?? {};
+    const dd = d as Record<string, unknown>;
+    const message =
+      (typeof dd?.message === "string" ? (dd.message as string) : undefined) ||
+      (typeof dd?.error === "string" ? (dd.error as string) : undefined) ||
+      (error?.message as string) ||
+      "Une erreur est survenue";
+
+    try {
+      if (status === 401) {
+        toast.error("Session expirée. Veuillez vous reconnecter.");
+        try {
+          useAuthStore.getState().logout();
+        } catch (err) {
+          console.error("Erreur lors de la déconnexion de l'utilisateur:", err);
+        }
+        if (
+          typeof window !== "undefined" &&
+          !window.location.pathname.startsWith("/auth")
+        ) {
+          setTimeout(() => {
+            window.location.href = "/auth?method=login";
+          }, 300);
+        }
+      } else if (status === 403) {
+        toast.error(message || "Accès non autorisé");
+      } else if (status >= 500) {
+        toast.error("Erreur serveur. Veuillez réessayer.");
+      } else if (status !== 0) {
+        toast.error(message);
+      }
+    } catch (err) {
+      console.error("Erreur dans l'intercepteur de réponse:", err);
+    }
+
+    interface NormalizedError extends Error {
+      statusCode?: number;
+      details?: unknown;
+    }
+    const normalized: NormalizedError = new Error(message);
+    normalized.statusCode = status;
+    normalized.details =
+      (dd?.details as unknown) || (dd?.errors as unknown) || null;
+    return Promise.reject(normalized);
+  }
+);
+
+// New function for image upload
+async function uploadImage(
+  file: File
+): Promise<{ url: string; publicId: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("folder", "products");
+
+  try {
+    const response = await apiClient.post<{ publicId: string; url: string }>(
+      "/upload/image",
+      formData,
+      {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error("Error uploading image:", error);
+    throw new Error("Failed to upload image");
+  }
+}
+
+export async function deleteImage(publicId: string): Promise<void> {
+  try {
+    await apiClient.delete(`/upload/image/${publicId}`);
+  } catch (error) {
+    console.error("Error deleting image:", error);
+    throw new Error("Failed to delete image");
+  }
+}
+
+class ApiResourceService<T, C = Omit<T, "id" | "createdAt" | "updatedAt">> {
+  protected endpoint: string; // Changé de private à protected
+
+  constructor(endpoint: string) {
+    this.endpoint = endpoint;
+  }
+
+  async getAll(params?: ProductsParams): Promise<T[]> {
+    try {
+      const response = await apiClient.get<T[]>(`/${this.endpoint}`, {
+        params,
+      });
+      return Array.isArray(response.data) ? response.data : [];
+    } catch (e) {
+      console.warn(`[API Service] getAll failed for ${this.endpoint}:`, e);
+      return [];
+    }
+  }
+
+  async get(id: string): Promise<T> {
+    const response = await apiClient.get<T>(`/${this.endpoint}/${id}`);
+    return response.data;
+  }
+
+  async create(data: C): Promise<T> {
+    const response = await apiClient.post<T>(`/${this.endpoint}`, data);
+    return response.data;
+  }
+
+  async update(id: string, data: Partial<T>): Promise<T> {
+    const response = await apiClient.put<T>(`/${this.endpoint}/${id}`, {
+      ...data,
+      updatedAt: new Date().toISOString(),
+    });
+    return response.data;
+  }
+
+  async delete(id: string): Promise<void> {
+    const response = await apiClient.delete(`/${this.endpoint}/${id}`);
+
+    // Handle different response structures
+    if (response.data && typeof response.data === "object") {
+      const responseData = response.data as unknown as Record<string, unknown>;
+      if ((responseData.success as boolean) === false) {
+        const msg =
+          typeof responseData.message === "string"
+            ? (responseData.message as string)
+            : "Delete operation failed";
+        throw new Error(msg);
+      }
+    }
+
+    // Return void for successful deletion
+    return;
+  }
+}
+
+export type OrderCreationResult = {
+  id?: string;
+  total?: number;
+  status?: import("@/types").Order["status"] | string;
+  paymentUrl?: string;
+  redirectUrl?: string;
+  data?: {
+    data?: {
+      id?: string;
+      total?: number;
+      status?: string;
+      paymentUrl?: string;
+      redirectUrl?: string;
+    };
+  };
+};
+
+export const apiService = {
+  // Image upload services
+  images: {
+    validateFile(file: File): { isValid: boolean; error?: string } {
+      // Allowed file types based on backend validation
+      const allowedTypes = [
+        "image/jpeg",
+        "image/jpg",
+        "image/png",
+        "image/gif",
+        "image/svg+xml",
+      ];
+      const maxSize = 5 * 1024 * 1024; // 5MB
+
+      if (!allowedTypes.includes(file.type)) {
+        return {
+          isValid: false,
+          error: `Type de fichier non supporté. Types acceptés: JPG, JPEG, PNG, GIF, SVG`,
+        };
+      }
+
+      if (file.size > maxSize) {
+        return {
+          isValid: false,
+          error: `Fichier trop volumineux. Taille maximale: 5MB`,
+        };
+      }
+
+      return { isValid: true };
+    },
+
+    async upload(file: File): Promise<{ publicId: string; url: string }> {
+      // Validate file before upload
+      const validation = this.validateFile(file);
+      if (!validation.isValid) {
+        throw new Error(validation.error);
+      }
+
+      const formData = new FormData();
+      formData.append("file", file); // Changed from 'image' to 'file'
+
+      const response = await apiClient.post<{ publicId: string; url: string }>(
+        "/upload/image",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+        }
+      );
+      return response.data;
+    },
+
+    async delete(publicId: string): Promise<void> {
+      await apiClient.delete(`/upload/image/${publicId}`);
+    },
+  },
+
+  products: new (class extends ApiResourceService<Product> {
+    constructor() {
+      super("produit"); // Changé de "products" à "produit"
+    }
+
+    async createProduct(
+      product: Omit<Product, "id" | "createdAt" | "updatedAt">
+    ): Promise<Product> {
+      // Map Product to CreateProduitDto format, excluding invalid properties
+      const createDto: CreateProduitDto = {
+        name: product.name,
+        title: product.title,
+        sku: product.sku,
+        description: product.description,
+        price: Number(product.price),
+        stock: Number(product.stock),
+        images: (product.images || []).map((img) => ({
+          url: String(img.url || ""),
+          altText: String(img.altText || ""),
+        })),
+        rating: Number(product.rating || 0),
+        categoryId: product.categoryId,
+        brandId: product.brandId,
+        originalPrice: Number(product.originalPrice || 0),
+        vendorId: product.vendorId || "", // Map vendorId to vendorId
+        reports: Number(product.reports || 0),
+        tags: product.tags || [],
+        condition: product.condition || "neuf",
+        reviews: product.reviews || [],
+        attributes: product.attributes || {},
+        status: product.status || "disponible",
+        specifications: product.specifications || [],
+      };
+
+      // Remove any undefined or null values
+      const cleanDto = Object.fromEntries(
+        Object.entries(createDto).filter(
+          ([_, value]) => value !== undefined && value !== null
+        )
+      );
+
+      console.log("Sending product data:", cleanDto);
+      const response = await apiClient.post<Product>(
+        `/${this.endpoint}`,
+        cleanDto
+      );
+      return response.data;
+    }
+
+    async getByCategory(categoryId: string): Promise<Product[]> {
+      const response = await apiClient.get<Product[]>(`/produit`, {
+        params: { categoryId },
+      });
+      if (response.status !== 200) {
+        throw new Error(`Products for category ${categoryId} not found`);
+      }
+      return response.data;
+    }
+  })(),
+
+  categories: new (class extends ApiResourceService<Category> {
+    constructor() {
+      super("produit/categories");
+    }
+
+    async getSubCategories(categoryId: string): Promise<Category[]> {
+      const allCategories = await this.getAll();
+      return allCategories.filter(
+        (category) => category.parentId === categoryId
+      );
+    }
+  })(),
+
+  brands: new ApiResourceService<Brand>("produit/brands"), // Changé de "brands" à "produit/brands"
+
+  orders: new (class extends ApiResourceService<Order> {
+    constructor() {
+      super("orders");
+    }
+
+    async get(id: string): Promise<Order> {
+      const response = await apiClient.get<Order>(`/orders/${id}`);
+      return response.data;
+    }
+
+    async getAll(params?: Record<string, unknown>): Promise<Order[]> {
+      try {
+        const response = await apiClient.get<Order[]>(`/orders`, { params });
+        return Array.isArray(response.data) ? response.data : [];
+      } catch (error) {
+        console.error("Error fetching orders:", error);
+        return [];
+      }
+    }
+
+    async getByClient(userId: string): Promise<Order[]> {
+      try {
+        // Try dedicated client endpoint first
+        const resp1 = await apiClient.get<Order[]>(`/orders/client/${userId}`);
+        if (Array.isArray(resp1.data)) return resp1.data;
+      } catch (err) {
+        console.debug(
+          "No dedicated client orders endpoint, falling back.",
+          err
+        );
+      }
+      try {
+        // Fallback to query param with expected field name
+        const resp2 = await apiClient.get<Order[]>(`/orders`, {
+          params: { clientId: userId },
+        });
+        return Array.isArray(resp2.data) ? resp2.data : [];
+      } catch (error) {
+        console.error("Error fetching orders by client:", error);
+        return [];
+      }
+    }
+
+    async createOrder(
+      order: Omit<Order, "id" | "createdAt" | "updatedAt">
+    ): Promise<OrderCreationResult> {
+      const response = await apiClient.post<OrderCreationResult>(
+        `/${this.endpoint}`,
+        order
+      );
+      return response.data;
+    }
+
+    async getMerchantOrders(vendorId: string): Promise<MerchantOrder[]> {
+      const response = await apiClient.get<MerchantOrder[]>(`/orders/merchant`);
+      return Array.isArray(response.data) ? response.data : [];
+    }
+
+    async updateStatus(
+      orderId: string,
+      status: Order["status"]
+    ): Promise<Order> {
+      const response = await apiClient.put<Order>(`/orders/status`, {
+        orderId,
+        status,
+      });
+      return response.data;
+    }
+
+    async initiatePayment(dto: {
+      item_name: string;
+      item_price: number;
+      ref_command: string;
+      command_name: string;
+      currency?: string;
+      target_payment?: string;
+      user?: { phone_number: string; first_name: string; last_name: string };
+    }): Promise<{ redirectUrl: string }> {
+      const response = await apiClient.post(`/orders/initiate-payment`, dto);
+      return response.data as { redirectUrl: string };
+    }
+  })(),
+
+  notifications: new (class {
+    async getByUser(userId: string, page = 1, limit = 20): Promise<any[]> {
+      try {
+        const response = await apiClient.get(`/notifications/user/${userId}`, {
+          params: { page, limit },
+        });
+        const data = response.data as any;
+        if (Array.isArray(data)) return data;
+        if (
+          data &&
+          typeof data === "object" &&
+          Array.isArray((data as any).items)
+        ) {
+          return (data as any).items;
+        }
+        return Array.isArray(data?.data) ? data.data : [];
+      } catch (e: any) {
+        if (e?.statusCode === 404) return [];
+        return [];
+      }
+    }
+
+    async markAsRead(userId: string, notificationId: string): Promise<boolean> {
+      try {
+        const response = await apiClient.put(
+          `/notifications/user/${userId}/read/${notificationId}`
+        );
+        return !!response?.data;
+      } catch {
+        return false;
+      }
+    }
+  })(),
+
+  users: new (class {
+    async getAll(params?: Record<string, unknown>): Promise<User[]> {
+      try {
+        const response = await apiClient.get<User[]>(`/auth/admin/users`, {
+          params,
+        });
+        return Array.isArray(response.data) ? response.data : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    async get(id: string): Promise<User> {
+      const response = await apiClient.get<User>(`/auth/admin/users`);
+      return response.data;
+    }
+
+    async create(
+      user: Omit<User, "id" | "createdAt" | "updatedAt">
+    ): Promise<User> {
+      const response = await apiClient.post<User>(`/auth/admin/users`, user);
+      return response.data;
+    }
+
+    async update(id: string, data: Partial<User>): Promise<User> {
+      const response = await apiClient.put<User>(
+        `/auth/admin/users/${id}`,
+        data
+      );
+      return response.data;
+    }
+
+    async delete(id: string): Promise<void> {
+      await apiClient.delete(`/auth/admin/users/${id}`);
+    }
+
+    async getMerchants(): Promise<MerchantProfile[]> {
+      const response = await apiClient.get<MerchantProfile[]>(
+        `/auth/merchant/profiles`
+      );
+      if (response.status !== 200) {
+        throw new Error(`Failed to fetch merchant profiles`);
+      }
+      return response.data;
+    }
+
+    async getMerchant(id: string): Promise<MerchantProfile> {
+      const response = await apiClient.get<MerchantProfile>(
+        `/auth/merchant/profile/${id}`
+      );
+      if (response.status !== 200) {
+        throw new Error(`Merchant profile with id ${id} not found`);
+      }
+      return response.data;
+    }
+
+    async getMerchantProfile(): Promise<MerchantProfile> {
+      const response = await apiClient.get<MerchantProfile>(
+        `/auth/merchant/profile`
+      );
+      if (response.status !== 200) {
+        throw new Error(`Failed to fetch merchant profile`);
+      }
+      return response.data;
+    }
+
+    async getMerchantStats(id: string): Promise<MerchantStats> {
+      const response = await apiClient.get<MerchantStats>(`/merchant/stats`);
+      if (response.status !== 200) {
+        throw new Error(`Failed to fetch merchant stats for id ${id}`);
+      }
+      console.log("Merchant stats response:", response.data);
+      return response.data;
+    }
+
+    async getAdminStats(): Promise<import("@/types").AdminStats> {
+      const response = await apiClient.get<import("@/types").AdminStats>(
+        `/auth/admin/stats`
+      );
+      if (response.status !== 200) {
+        throw new Error(`Failed to fetch admin stats`);
+      }
+      return response.data;
+    }
+
+    async getAdminUsers(): Promise<import("@/types").AdminUser[]> {
+      const response = await apiClient.get<import("@/types").AdminUser[]>(
+        `/auth/admin/users`
+      );
+      if (response.status !== 200) {
+        throw new Error(`Failed to fetch admin users`);
+      }
+      return Array.isArray(response.data) ? response.data : [];
+    }
+
+    async updateProfile(data: Partial<User>): Promise<unknown> {
+      const response = await apiClient.put(`/auth/profile`, data);
+      return response.data;
+    }
+
+    async createMerchantProfile(
+      data: CreateMerchantProfileDto
+    ): Promise<unknown> {
+      const response = await apiClient.post(`/auth/merchant/profile`, data);
+      return response.data;
+    }
+  })(),
+};
+
+export { uploadImage };
